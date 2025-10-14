@@ -1,2 +1,17 @@
-node_modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Environment
 .env
+.env.local
+
+# WhatsApp-web.js session/cache
+.wwebjs_auth/
+.wwebjs_cache/
+WaJS/.wwebjs_auth/
+WaJS/.wwebjs_cache/
+
+# OS
+.DS_Store
+Thumbs.db
