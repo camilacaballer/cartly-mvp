@@ -1,13 +1,5 @@
 import 'dotenv/config';
-import express from 'express';
 import Airtable from 'airtable';
-import twilio from 'twilio';
-
-const app = express();
-app.use(express.urlencoded({ extended: false })); // Twilio envía x-www-form-urlencoded
-
-// Twilio
-const { MessagingResponse } = twilio.twiml;
 
 // Airtable
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT;

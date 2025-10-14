@@ -1,5 +1,8 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const { ProductParser } = require('../src/productParser.js');
+const { saveProduct } = require('../src/airtableHandler.js');
+require('dotenv').config();
 
 // IDs grupos
 //MarketPlace  → 120363257753809611@g.us
