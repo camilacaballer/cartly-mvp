@@ -2,6 +2,7 @@ import ProductParser from './productParser.js';
 import dotenv from 'dotenv';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { saveProduct } from './airtableHandler.js';
 
 // Get the directory name of the current module
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -40,6 +41,10 @@ async function testParser() {
             const result = await parser.parseMessage(msg.text, msg.mediaUrls);
             console.log('Resultado estructurado:');
             console.log(JSON.stringify(result, null, 2));
+            
+            // Save to Airtable
+            await saveProduct(result);
+            console.log('Saved to Airtable successfully');
         } catch (error) {
             console.error('Error procesando mensaje:', error);
         }
