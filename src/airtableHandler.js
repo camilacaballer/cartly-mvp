@@ -31,6 +31,7 @@ export async function saveProduct(productData) {
             descripcion_corta: productData.descripcion_corta || '',
             fotos: productData.fotos && productData.fotos.length > 0 ? productData.fotos[0] : ''
             // fecha_creacion is automatically handled by Airtable's "Created time" field
+
         };
 
         const records = await base(AIRTABLE_TABLE_NAME).create([{ fields }]);

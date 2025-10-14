@@ -11,17 +11,28 @@ class ProductParser {
     async parseMessage(message, mediaUrls = []) {
         try {
             // Prepare the prompt with clear instructions for the AI
-            const prompt = `Extract product information from this WhatsApp message. Format the response as JSON with these fields:
-            - nombre_vendedor (name of seller if mentioned)
-            - nombre_producto (product name/title)
-            - precio (IMPORTANT: if price is negotiable or includes words like "negociable", "conversable", you must set this field to exactly "negociable". Otherwise, use numbers only and convert any "k" to thousands)
-            - descripcion_corta (short description, max 140 chars)
+            const prompt = `Extract product information from this WhatsApp message. You MUST return a JSON object with ALL of these fields:
 
-            Message: "${message}"
+            {
+              "nombre_vendedor": "string, name of seller if found, empty string if not found",
+              "telefono_vendedor": "string, phone number in format '3001234567' (only digits, no spaces or special chars), empty string if not found",
+              "nombre_producto": "string, product name/title",
+              "precio": "if negotiable use string 'negociable', if fixed use number (convert k to thousands)",
+              "descripcion_corta": "string, short description max 140 chars"
+            }
+
+            IMPORTANT:
+            - Look carefully for phone numbers after words like: contacto, cel, celular, número, whatsapp, etc.
+            - Remove ALL non-digit characters from phone numbers
+            - ALL fields must be present in the JSON response
+            - NEVER return null values, use empty strings instead
+
+            Message to parse: "${message}"
 
             Respond only with valid JSON. Example for fixed price:
             {
                 "nombre_vendedor": "Juan Pérez",
+                "telefono_vendedor": "3188098899",
                 "nombre_producto": "Bicicleta montañera",
                 "precio": 120000,
                 "descripcion_corta": "Bicicleta en excelente estado, poco uso"
@@ -30,6 +41,7 @@ class ProductParser {
             Example for negotiable price:
             {
                 "nombre_vendedor": "Ana García",
+                "telefono_vendedor": "3188170099",
                 "nombre_producto": "iPhone 13",
                 "precio": "negociable",
                 "descripcion_corta": "iPhone 13 128GB, precio conversable"
@@ -40,7 +52,7 @@ class ProductParser {
                 messages: [
                     {
                         role: "system",
-                        content: "You are a product information parser. Extract structured data from informal messages about products for sale. Always respond with valid JSON. Follow these rules exactly:\n1. For negotiable prices (when price includes words like 'negociable', 'conversable'), set precio to the string 'negociable'\n2. For fixed prices, use numbers only\n3. Never use null for precio\n\nExample with negotiable price:\nInput: 'Vendo iPhone, precio negociable'\nOutput: { \"nombre_vendedor\": \"\", \"nombre_producto\": \"iPhone\", \"precio\": \"negociable\", \"descripcion_corta\": \"iPhone en venta\" }"
+                        content: "You are a product information parser. Extract structured data from informal messages about products for sale. Always respond with valid JSON and ALWAYS include ALL fields, even if empty. Follow these rules exactly:\n1. ALWAYS extract phone numbers when available (look for patterns like 'contacto:', 'cel', 'número', 'whatsapp', etc.)\n2. For phone numbers, remove all special characters and spaces, keep only digits\n3. For negotiable prices (when price includes words like 'negociable', 'conversable'), set precio to 'negociable'\n4. For fixed prices, use numbers only\n5. Never use null for any field\n\nExample outputs:\n\nInput: 'Vendo iPhone, precio negociable. Contacto: 300-123-4567'\nOutput: { \"nombre_vendedor\": \"\", \"telefono_vendedor\": \"3001234567\", \"nombre_producto\": \"iPhone\", \"precio\": \"negociable\", \"descripcion_corta\": \"iPhone en venta\" }\n\nInput: 'Soy Juan (cel 311-222-3333), vendo bici a 500k'\nOutput: { \"nombre_vendedor\": \"Juan\", \"telefono_vendedor\": \"3112223333\", \"nombre_producto\": \"bici\", \"precio\": 500000, \"descripcion_corta\": \"vendo bici\" }"
                     },
                     {
                         role: "user",
@@ -71,6 +83,7 @@ class ProductParser {
         // Ensure all required fields exist with proper formatting
         const validated = {
             nombre_vendedor: data.nombre_vendedor || '',
+            telefono_vendedor: data.telefono_vendedor || '',
             nombre_producto: (data.nombre_producto || '').slice(0, 60),
             precio: data.precio,  // We'll handle price validation separately
             descripcion_corta: (data.descripcion_corta || '').slice(0, 140),
