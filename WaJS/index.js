@@ -1,5 +1,8 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const { default: ProductParser } = require('../src/productParser.js');
+const { saveProduct } = require('../src/airtableHandler.js');
+require('dotenv').config({ path: '../.env' });
 
 const { ProductParser } = require('../src/productParser.js');
 const { saveProduct } = require('../src/airtableHandler.js');
@@ -10,6 +13,9 @@ require('dotenv').config();
 //Prueba → 120363401876396913@g.us
 
 const GROUP_ID = '120363401876396913@g.us'; // ID GRUPO
+
+// Create parser instance
+const parser = new ProductParser(process.env.OPENAI_API_KEY);
 
 
 const fs = require('fs');
@@ -352,7 +358,7 @@ client.on('message', async (msg) => {
   const fallbackCli = path.resolve(__dirname, '..', '..', 'Cartly', 'cartly-mvp', 'src', 'parseMessageCli.js');
   const finalCli = require('fs').existsSync(cliPath) ? cliPath : fallbackCli;
 
-  execFile(process.execPath, [finalCli, input], { timeout: 10_000 }, (err, stdout, stderr) => {
+  execFile(process.execPath, [finalCli, input], { timeout: 10_000 }, async (err, stdout, stderr) => {
     if (err) {
       console.error('Parser CLI error:', err.message);
       if (stderr) console.error('Parser stderr:', stderr);
@@ -365,6 +371,17 @@ client.on('message', async (msg) => {
       const jsonText = idx >= 0 ? stdout.slice(idx + marker.length).trim() : stdout.trim();
       const parsed = JSON.parse(jsonText);
       console.log('Parsed JSON:', JSON.stringify(parsed, null, 2));
+
+      // Add the sender's phone number to the parsed data
+      parsed.telefono_vendedor = sender.startsWith('+') ? sender.slice(1) : sender;
+
+      // Save to Airtable
+      try {
+        await saveProduct(parsed);
+        console.log('Product saved to Airtable successfully');
+      } catch (airtableError) {
+        console.error('Error saving to Airtable:', airtableError);
+      }
     } catch (e) {
       console.error('Could not parse CLI output as JSON. Raw stdout:', stdout);
     }

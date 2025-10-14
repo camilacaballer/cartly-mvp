@@ -29,8 +29,9 @@ export async function saveProduct(productData) {
             telefono_vendedor: productData.telefono_vendedor || '',
             Precio: typeof productData.precio === 'number' ? productData.precio.toString() : 'negociable',
             descripcion_corta: productData.descripcion_corta || '',
-            fotos: productData.fotos && productData.fotos.length > 0 ? productData.fotos[0] : '',
-            // fecha_creacion will be automatically set by Airtable's "Created time" field
+            fotos: productData.fotos && productData.fotos.length > 0 ? productData.fotos[0] : ''
+            // fecha_creacion is automatically handled by Airtable's "Created time" field
+
         };
 
         const records = await base(AIRTABLE_TABLE_NAME).create([{ fields }]);
