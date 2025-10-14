@@ -1,5 +1,6 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+
 const { ProductParser } = require('../src/productParser.js');
 const { saveProduct } = require('../src/airtableHandler.js');
 require('dotenv').config();
@@ -13,6 +14,69 @@ const GROUP_ID = '120363401876396913@g.us'; // ID GRUPO
 
 const fs = require('fs');
 const path = require('path');
+// Utility function to force-remove a file/directory
+// Generate a unique session path for this run
+const getUniqueSessionPath = () => {
+  const timestamp = new Date().toISOString().replace(/[:]/g, '-').slice(0, 19);
+  return path.join(__dirname, '.wwebjs_sessions', `session_${timestamp}`);
+};
+
+const forceRemove = async (path) => {
+  if (!fs.existsSync(path)) return;
+  try {
+    if (fs.lstatSync(path).isDirectory()) {
+      const files = fs.readdirSync(path);
+      for (const file of files) {
+        await forceRemove(path + '/' + file);
+      }
+      fs.rmdirSync(path);
+    } else {
+      for (let attempts = 0; attempts < 5; attempts++) {
+        try {
+          fs.unlinkSync(path);
+          break;
+        } catch (e) {
+          if (e.code === 'EBUSY' || e.code === 'EPERM') {
+            await new Promise(r => setTimeout(r, 1000)); // wait and retry
+            continue;
+          }
+          throw e;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`Could not remove ${path}:`, e?.message || e);
+  }
+};
+
+// Manage browser and session cleanup
+let browser = null;
+const sessionPath = getUniqueSessionPath();
+
+const cleanupSession = async () => {
+  console.log('Using session path:', sessionPath);
+  
+  // Create sessions directory if it doesn't exist
+  const sessionsDir = path.join(__dirname, '.wwebjs_sessions');
+  if (!fs.existsSync(sessionsDir)) {
+    fs.mkdirSync(sessionsDir, { recursive: true });
+  }
+
+  // Clean up old session directories (keep last 5)
+  try {
+    const sessions = fs.readdirSync(sessionsDir)
+      .filter(f => f.startsWith('session_'))
+      .sort()
+      .reverse();
+    
+    for (const oldSession of sessions.slice(5)) {
+      await forceRemove(path.join(sessionsDir, oldSession));
+    }
+  } catch (e) {
+    console.warn('Error cleaning old sessions:', e?.message || e);
+  }
+};
+
 const client = (() => {
   // Decide executable path for puppeteer/Chrome more robustly
   let execPath;
@@ -46,27 +110,51 @@ const client = (() => {
   }
 
   const puppeteerOpts = {
-    // Use non-headless to show the browser window for debugging on Windows.
-    headless: false,
-    dumpio: true,
+    // Conservative options for stability on Windows/servers.
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
       '--disable-gpu',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--remote-debugging-port=9222'
+      '--window-size=1920x1080',
+      '--aggressive-cache-discard',
+      '--disable-cache',
+      '--disable-application-cache',
+      '--disable-offline-load-stale-cache',
+      '--disk-cache-size=0'
     ]
   };
   if (execPath) puppeteerOpts.executablePath = execPath;
 
   return new Client({
-    authStrategy: new LocalAuth({ dataPath: '.wwebjs_auth' }),
-    puppeteer: puppeteerOpts,
+    authStrategy: new LocalAuth({ dataPath: sessionPath }),
+    puppeteer: {
+      ...puppeteerOpts,
+      // Browser instance management
+      createBrowserFetcher: () => {
+        return {
+          launch: async () => {
+            if (browser) {
+              try {
+                await browser.close();
+              } catch (e) {
+                console.warn('Error closing previous browser:', e?.message || e);
+              }
+            }
+            try {
+              const puppeteer = require('puppeteer-core');
+              browser = await puppeteer.launch(puppeteerOpts);
+              return browser;
+            } catch (e) {
+              console.error('Browser launch error:', e?.message || e);
+              throw e;
+            }
+          }
+        };
+      }
+    },
     restartOnAuthFail: true,
     takeoverOnConflict: true,
     takeoverTimeoutMs: 3 * 60 * 1000,
@@ -74,12 +162,62 @@ const client = (() => {
 })();
 
 client.on('qr', (qr) => qrcode.generate(qr, { small: true }));
-client.on('ready', () => console.log('Cliente listo. Escuchando grupo:', GROUP_ID));
+// Restart/backoff limiter to avoid rapid re-initialization loops
+let restartAttempts = 0;
+const MAX_RESTARTS = 6; // after this, stop trying to re-init automatically
+const BASE_DELAY_MS = 5000;
+
+// Event handlers for client state
+client.on('ready', () => {
+  restartAttempts = 0; // Reset counter on successful connection
+  console.log('Cliente listo. Escuchando grupo:', GROUP_ID);
+});
+
 client.on('auth_failure', (m) => console.error('auth_failure:', m));
 client.on('change_state', (s) => console.log('state:', s));
-client.on('disconnected', (reason) => {
-  console.error('disconnected:', reason, ' → re-init en 5s');
-  setTimeout(() => client.initialize(), 5000);
+
+client.on('disconnected', async (reason) => {
+  console.error('disconnected:', reason);
+  if (restartAttempts >= MAX_RESTARTS) {
+    console.error(`Reached max restart attempts (${MAX_RESTARTS}). Manual intervention required.`);
+    console.error('Please scan QR code again to re-authenticate.');
+    
+    // Try to clean up browser
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (e) {
+        console.warn('Error closing browser:', e?.message || e);
+      }
+      browser = null;
+    }
+    
+    // Exit process for a clean restart
+    process.exit(1);
+  }
+  
+  restartAttempts += 1;
+  const delay = BASE_DELAY_MS * Math.pow(2, restartAttempts - 1); // exponential backoff: 5s,10s,20s...
+  console.warn(`re-init attempt #${restartAttempts} in ${delay/1000}s`);
+  
+  // Clean up browser before retry
+  if (browser) {
+    try {
+      await browser.close();
+    } catch (e) {
+      console.warn('Error closing browser:', e?.message || e);
+    }
+    browser = null;
+  }
+  
+  // Wait for the backoff delay
+  await new Promise(resolve => setTimeout(resolve, delay));
+  
+  try {
+    await client.initialize();
+  } catch (e) {
+    console.error('Error during re-initialize:', e?.message || e);
+  }
 });
 
 
@@ -233,20 +371,83 @@ client.on('message', async (msg) => {
   });
 });
 
-// --- Watchdog opcional: si se cae el estado, reinicia ---
-setInterval(async () => {
+// --- Enhanced watchdog and keep-alive system ---
+let lastActivity = Date.now();
+let lastPingSent = 0;
+const PING_INTERVAL = 30_000; // Send ping every 30 seconds
+const WATCHDOG_INTERVAL = 60_000; // Check connection every minute
+const ACTIVITY_TIMEOUT = 180_000; // Consider inactive after 3 minutes of no events
+
+// Update activity timestamp on any important event
+const updateActivity = () => {
+  lastActivity = Date.now();
+};
+
+client.on('message', updateActivity);
+client.on('message_ack', updateActivity);
+client.on('state_change', updateActivity);
+
+// Keep-alive ping to group
+const sendKeepAlivePing = async () => {
   try {
-    const state = await client.getState(); // CONNECTED | OPENING | PAIRING ...
-    if (state !== 'CONNECTED') {
-      console.warn('watchdog: state=', state, ' → re-init');
-      await client.destroy().catch(() => {});
-      client.initialize();
+    const chat = await client.getChatById(GROUP_ID);
+    if (chat) {
+      // Send invisible typing notification as keep-alive
+      await chat.sendStateTyping();
+      await new Promise(r => setTimeout(r, 100));
+      await chat.clearState();
+      lastPingSent = Date.now();
+      updateActivity();
     }
   } catch (e) {
-    console.warn('watchdog error → re-init', e?.message || e);
-    await client.destroy().catch(() => {});
-    client.initialize();
+    console.warn('Keep-alive ping failed:', e?.message || e);
   }
-}, 60_000);
+};
 
-client.initialize();
+// Enhanced watchdog
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const state = await client.getState(); // CONNECTED | OPENING | PAIRING ...
+    
+    // Log current status periodically (helps with monitoring)
+    console.log(`[${new Date().toISOString()}] Watchdog check - State: ${state}, Last activity: ${Math.floor((now - lastActivity)/1000)}s ago`);
+
+    // Check if we need to send a keep-alive ping
+    if (state === 'CONNECTED' && (now - lastPingSent) >= PING_INTERVAL) {
+      await sendKeepAlivePing();
+    }
+
+    // If no activity and bad state, attempt recovery
+    if ((now - lastActivity) >= ACTIVITY_TIMEOUT || state !== 'CONNECTED') {
+      console.warn('Watchdog: No recent activity or disconnected state detected');
+      if (restartAttempts < MAX_RESTARTS) {
+        console.warn('Attempting recovery...');
+        await client.destroy().catch(() => {});
+        await new Promise(r => setTimeout(r, 1000));
+        await client.initialize();
+      } else {
+        console.error('Max restart attempts reached - requires manual intervention');
+      }
+    }
+  } catch (e) {
+    console.warn('Watchdog error:', e?.message || e);
+    if (restartAttempts < MAX_RESTARTS) {
+      await client.destroy().catch(() => {});
+      await new Promise(r => setTimeout(r, 1000));
+      await client.initialize();
+    }
+  }
+}, WATCHDOG_INTERVAL);
+
+// Start the client
+(async () => {
+  try {
+    await cleanupSession();
+    updateActivity();
+    await client.initialize();
+  } catch (e) {
+    console.error('Error during startup:', e?.message || e);
+    process.exit(1);
+  }
+})();
