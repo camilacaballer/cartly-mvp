@@ -1,5 +1,6 @@
-// api/catalog.js — versión “cute” sin fotos ✨
+// api/catalog.js — versión "cute" sin fotos ✨
 import Airtable from 'airtable';
+import { applyCORS } from '../lib/cors.js';
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
@@ -176,6 +177,8 @@ function template({ cardsHtml, total }) {
 }
 
 export default async function handler(req, res) {
+  if (await applyCORS(req, res)) return;
+
   try {
     const records = await base(AIRTABLE_TABLE).select({
       sort: [{ field: 'fecha_creacion', direction: 'desc' }]
