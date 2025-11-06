@@ -47,7 +47,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    const hash = record.fields.password || '';
+    const hash = record.fields.password_hash || '';
     const ok = await bcrypt.compare(contraseña, hash);
     if (!ok) {
       res.status(401).json({ ok: false, error: 'INVALID_CREDENTIALS' });
